@@ -1,1 +1,190 @@
-COPY HERE
+---
+title: 'Forecast Averaging for Inflation'
+author: "Kieran Stewart-Phillips"
+date: "`r format(Sys.Date(),'%B %d, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    fig_caption: yes
+    theme: cerulean
+    toc: yes
+    toc_depth: 4
+    toc_float: no
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include = FALSE}
+rm(list = ls())
+graphics.off()
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+```
+
+```{r loadPackages, message=FALSE}
+require(fpp3)
+require(tsibble)
+require(tidyverse)
+require(tidyquant)
+require(lubridate)
+require(timetk)
+require(kableExtra)
+require(ggplot2)
+require(reshape2)
+```
+
+
+```{r downloadData}
+varList <- c("PCEPI", "UNRATE", "TCU", "IPMAN", "HOUST")
+X <-
+  tq_get(varList, get = "economic.data", from = "1982-01-01") %>%
+  mutate(Month = yearmonth(date), value = price) %>%
+  dplyr::select(-c(date, price)) %>%
+  as_tsibble(index = Month, key = symbol)
+Xw <- X %>%
+  pivot_wider(names_from = symbol, values_from = value) %>%
+  as_tsibble()  %>% 
+  drop_na()
+```
+
+### _Introduction_
+  Inflation universally remains a massively impactful factor within the economic health of a country. While not necessarily the main cause of economic recession, rising prices of consumer goods within an economy does tie into overall economic success as seen through events such as the 2008 recession where inflation rose above nominal wages, subsequently leading to a decrease in overall real wages. General theory also tells us that overall inflationary growth is usually followed by a recession due to unsustainable booms depending on how large the economic growth is. Thus, a growing area of concern for economic study in the modern day largely revolves around using analysis of inflation to better predict subsequent economic development. In an attempt to go about this, many economists have used economic modelling in order to try and understand various metrics that could come to influence inflation. One such model, the Phillips Curve, is employed within this paper and tested against with the hope that a model that better predicts inflation can be found. To see specific code used in this paper, please see the R markdown file at the attached link here:
+  
+  [Forecast Averaging code](https://kieranstewart-phillips.github.io/projects.html)
+  
+### _The Phillips Curve_
+The original Stock & Watson specification for the Phillips Curve is as follows:
+
+\[ \pi^{12}_t - \pi_{t-12} = \phi + \beta(B)\Delta_{\pi_{t-12}} + \gamma(B)_{u_{t-12}} + \varepsilon_t \]
+
+The curve identifies that inflation and unemployment have a stable and inverse relationship. In this paper, we will measure inflation using the Personal Consumption Expenditures Price Index ( _PCEPI_ ), while the unemployment rate ( _UNRATE_ ) will be represented in the model by $u_t$.
+
+### _Forecast Outline_
+  Specifically, this paper seeks to test other outside variables in place of unemployment to forecast inflation. Each outside variable's forecast will be graphed alongside the unemployment rate and an average of all outside variables will be calculated to analyze an overall impact from the variables. 
+  
+Outside variables will be represented as:
+  
+  _TCU_ - Capacity Utilization: Total Index
+  
+  _IPMAN_ - Industrial Production: Manufacturing (NAICS)
+  
+  _HOUST_ - New Privately-Owned Housing Units Started: Total Units
+  
+Variables were picked with the purpose of correlation to inflation being in mind. Capacity utilization rates, for instance, generally fall steeply in recessions and rise during recovery with higher capacity utilization usually is related to increased inflation. Similarly, the level of Industrial Production likely has an impact on inflation as seen recently with the supply chain crisis and subsequent inflation throughout late 2021 and 2022. For replicability purposes, all data being tested starts from 1982 and was acquired from the Federal Reserve Economic Data (FRED). All variables were seasonally adjusted.
+
+```{r plotData, include = FALSE}
+X %>% 
+  ggplot(aes(x = Month, y = value)) + 
+  geom_line() + 
+  facet_grid(vars(symbol), scales = "free_y") + 
+  labs(y = " ")
+```
+
+```{r plotDataLn, include = FALSE}
+X1 <- X %>% filter(symbol==c("PCEPI","IPMAN","HOUST")) 
+X1 %>% ggplot(aes(x = Month, y = log(value))) + 
+  geom_line() + 
+  facet_grid(vars(symbol), scales = "free_y") + 
+  labs(y = " ")
+```
+
+```{r mutate}
+mutatedvar <- Xw %>% select(c("PCEPI", "UNRATE", "TCU", "IPMAN", "HOUST")) %>%
+  mutate(inflation = 1200*log(PCEPI/lag(PCEPI))) %>%
+  mutate(dinflation = inflation - lag(inflation, 1)) %>%
+  mutate(dinflation12 = 100*log(PCEPI/lag(PCEPI, 12)) - lag(inflation, 12)) %>%
+  mutate(unrate = UNRATE - lag(UNRATE)) %>%
+  mutate(tcu = TCU - lag(TCU)) %>%
+  mutate(ipman = 1200*log(IPMAN/lag(IPMAN))) %>%
+  mutate(houst = 100*log(HOUST/lag(HOUST))) %>% 
+  select(-c(PCEPI, UNRATE, TCU, IPMAN, HOUST)) %>% 
+  drop_na()
+train_data <- mutatedvar %>% filter_index(~ "2018-12")
+test_data <- mutatedvar %>% filter_index("2019-01" ~ .)
+```
+
+```{r plotpostmutate, include = FALSE}
+mutatemelt <- melt(mutatedvar, "Month")
+ggplot(mutatemelt, aes(Month, value)) +
+  geom_line() +
+  facet_wrap(~variable, scales = "free", ncol = 2)
+```
+
+### _Forecasting Results_
+The graph below displays all the forecasted models against one another. The black line indicates the true inflation value while the colored models represent each color-coded variable. The two best fitting models to the actual inflation values ended up being the _IPMAN_ variable and our averaged _ensemble_ model. 
+
+The first table below the forecast graph indicates the Mean Absolute Percentage Error values per each variable tested in the sample denoted by _training_ . MAPE can be summarized as the individual absolute errors of the model divided by the demand. The MAPE values here can be useful for analyzing accuracy as a lower MAPE indicates a better model.
+
+The _Training_ table shows that the best performing models, or the models with the lowest mean absolute percentage errors, were using the Industrial Production variable, followed by the Capacity Utilization variable, and then this test's overall averaged lagged model denoted by _ensemble_ . While the Capacity Utilization and Industrial Production variables were close in value (181.8317 and 180.6336 respectively), the overall averaged model was rather higher while still being the third best model.
+
+The last table shows the relative MAPE values out of sample for the testing variables denoted by _Test_ . The forecasting here indicates that the best performing models were Capacity Utilization variable followed by the _ensemble_ model. Interestingly enough, both values were quite close being only 3.3542 away from eachother, while the next highest MAPE, the Industrial Production variable, was 7.9159 points higher than our _ensemble_ test. 
+
+Between both tables, the unemployment rate and the housing variables ended up having higher MAPE values than the other models, switching between the bottom two models in terms of performance. This tends to fall in line with initial speculations with regards to unemployment rate due to its inverse relationship with inflation as well as  the housing variable as one might expect to find that an increase in the number of New Privately-Owned Housing Units would likely indicate an increase consumer power and lower inflation. 
+
+```{r fittingphillipscurve, include = FALSE}
+fitPC <- train_data %>% 
+  model(
+    mUNRATE = TSLM(dinflation12 ~ 1 +
+                 lag(dinflation,12) + lag(dinflation,13) + lag(dinflation,14) +
+                 lag(dinflation,15) + lag(dinflation,16) + lag(dinflation,17) +
+                 lag(dinflation,18) + lag(dinflation,19) + lag(dinflation,20) +
+                 lag(dinflation,21) + lag(dinflation,22) + lag(dinflation,23) +
+                 lag(unrate,12) + lag(unrate,13) + lag(unrate,14) +
+                 lag(unrate,15) + lag(unrate,16) + lag(unrate,17) +
+                 lag(unrate,18) + lag(unrate,19) + lag(unrate,20) +
+                 lag(unrate,21) + lag(unrate,22) + lag(unrate,23)),
+   
+     mTCU = TSLM(dinflation12 ~ 1 +
+                 lag(dinflation,12) + lag(dinflation,13) + lag(dinflation,14) +
+                 lag(dinflation,15) + lag(dinflation,16) + lag(dinflation,17) +
+                 lag(dinflation,18) + lag(dinflation,19) + lag(dinflation,20) +
+                 lag(dinflation,21) + lag(dinflation,22) + lag(dinflation,23) +
+                 lag(tcu,12) + lag(tcu,13) + lag(tcu,14) +
+                 lag(tcu,15) + lag(tcu,16) + lag(tcu,17) +
+                 lag(tcu,18) + lag(tcu,19) + lag(tcu,20) +
+                 lag(tcu,21) + lag(tcu,22) + lag(tcu,23)),
+  
+     mIPMAN = TSLM(dinflation12 ~ 1 +
+                 lag(dinflation,12) + lag(dinflation,13) + lag(dinflation,14) +
+                 lag(dinflation,15) + lag(dinflation,16) + lag(dinflation,17) +
+                 lag(dinflation,18) + lag(dinflation,19) + lag(dinflation,20) +
+                 lag(dinflation,21) + lag(dinflation,22) + lag(dinflation,23) +
+                 lag(ipman,12) + lag(ipman,13) + lag(ipman,14) +
+                 lag(ipman,15) + lag(ipman,16) + lag(ipman,17) +
+                 lag(ipman,18) + lag(ipman,19) + lag(ipman,20) +
+                 lag(ipman,21) + lag(ipman,22) + lag(ipman,23)),
+    
+     mHOUST = TSLM(dinflation12 ~ 1 +
+                 lag(dinflation,12) + lag(dinflation,13) + lag(dinflation,14) +
+                 lag(dinflation,15) + lag(dinflation,16) + lag(dinflation,17) +
+                 lag(dinflation,18) + lag(dinflation,19) + lag(dinflation,20) +
+                 lag(dinflation,21) + lag(dinflation,22) + lag(dinflation,23) +
+                 lag(houst,12) + lag(houst,13) + lag(houst,14) +
+                 lag(houst,15) + lag(houst,16) + lag(houst,17) +
+                 lag(houst,18) + lag(houst,19) + lag(houst,20) +
+                 lag(houst,21) + lag(houst,22) + lag(houst,23)),
+  )
+tidy(fitPC)
+```
+
+```{r ensembleplot}
+fitensemble <- fitPC %>%
+  mutate(ensemble = (mUNRATE + mTCU + mIPMAN + mHOUST)/4)
+fcensemble <- fitensemble %>% forecast(new_data = test_data)
+fcensemble %>% autoplot(filter(mutatedvar, year(Month) > 2016), level = c(95))
+fcensemble01 <- accuracy(fitensemble) %>%
+  select(c(".model", ".type", "MAPE")) %>%
+  kable(format = "html", table.attr = "style='width:30%;' ") %>%
+  kableExtra::kable_styling()
+fcensemble01
+fcensemble02 <- accuracy(fcensemble, mutatedvar) %>%
+  select(c(".model", ".type", "MAPE")) %>%
+  kable(format = "html", table.attr = "style='width:30%;' ") %>%
+  kableExtra::kable_styling()
+fcensemble02
+```
+
+### _Conclusion_
+After forecasting each model, we arrive at an interesting crossroads in our data analysis. While the best fitting models ended up being those from the _IPMAN_ variable and our _ensemble_ average, the overall fits of even the best performing models in this analysis ended up being quite lackluster in their approximation of inflation. There is also quite a large confidence level being analyzed over the course of the graph. While our _ensemble_ model does hold up the best out of all variables analyzed, inflation on a general level is under the influence of a wide number of outside variables in the economy, and a model of this level is likely not sufficient in giving a truly reliable forecast for inflation. Future models including more influencing variables are likely going to be needed to provide a valid overall average forecast for inflation.
